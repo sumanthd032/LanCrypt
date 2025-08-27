@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/sumanthd032/lancrypt/internal/transfer" 
 )
 
 // This is the root command for our CLI tool.
@@ -26,11 +27,25 @@ var sendCmd = &cobra.Command{
 	Use:   "send [file]",
 	Short: "Send a file to a peer on the local network",
 	Long:  `Encrypts and sends a file to a receiving peer. It will generate a transfer code for the receiver to use.`,
-	Args:  cobra.ExactArgs(1), // Ensures the user provides exactly one argument (the file path)
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
 		fmt.Printf("Initializing to send file: %s\n", filePath)
-		// TODO: Implement sender logic in Step 1
+
+		// Create a new Sender.
+		sender, err := transfer.NewSender(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating sender: %v\n", err)
+			os.Exit(1)
+		}
+		// Ensure the listener is closed when we're done.
+		defer sender.Close()
+
+		// Start the sender process. This will block until a receiver connects.
+		if err := sender.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error during transfer: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
