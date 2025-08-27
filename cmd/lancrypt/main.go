@@ -56,14 +56,29 @@ var recvCmd = &cobra.Command{
 	Long:  `Receives a file from a sending peer using a transfer code.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		code, _ := cmd.Flags().GetString("code")
+		// The 'required' flag in init() already handles the empty case,
+		// but this is good practice for clarity.
 		if code == "" {
 			fmt.Println("Error: a transfer --code is required.")
 			os.Exit(1)
 		}
 		fmt.Printf("Initializing to receive file with code: %s\n", code)
-		// TODO: Implement receiver logic in Step 2
+
+		// Create a new Receiver.
+		receiver, err := transfer.NewReceiver(code)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating receiver: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Attempt to connect to the sender.
+		if err := receiver.Connect(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting to sender: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
+
 
 // This function runs at the very beginning.
 // It sets up our commands and flags.
