@@ -9,12 +9,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/sumanthd032/lancrypt/internal/rendezvous"
 	"github.com/sumanthd032/lancrypt/pkg/crypto"
+	"github.com/sumanthd032/lancrypt/pkg/util"
 	"golang.org/x/crypto/curve25519"
 )
 
-// ... (Sender struct and NewSender function remain the same) ...
+// fileMetadata holds information about the file being transferred.
+type fileMetadata struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// Sender represents the state for the sending side of the file transfer.
 type Sender struct {
 	FilePath     string
 	privateKey   [32]byte
@@ -23,6 +32,7 @@ type Sender struct {
 	listener     net.Listener
 }
 
+// NewSender creates and initializes a new Sender instance.
 func NewSender(filePath string) (*Sender, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -59,13 +69,30 @@ func NewSender(filePath string) (*Sender, error) {
 	return s, nil
 }
 
-
-// Start is updated to handle the full transfer protocol.
+// Start begins the sender's process of listening for a connection.
 func (s *Sender) Start() error {
-	addr := s.listener.Addr().String()
+	// Start the rendezvous server.
+	rvServer := rendezvous.NewServer()
+	rvServer.Start()
+	defer rvServer.Stop()
+
+	// Extract the port from the listener's address.
+	addrParts := strings.Split(s.listener.Addr().String(), ":")
+	port := addrParts[len(addrParts)-1]
+
+	// Generate a user-friendly code.
+	code, err := util.GenerateCode(3)
+	if err != nil {
+		return fmt.Errorf("could not generate code: %w", err)
+	}
+
+	// Register the code with the rendezvous server.
+	rvServer.Register(code, port)
+
 	fmt.Printf("✅ Sender is ready.\n")
-	fmt.Printf("Waiting for receiver on: %s\n", addr)
-	fmt.Printf("Use this address as the code for the receiver.\n\n")
+	fmt.Printf("Your transfer code is: %s\n\n", code)
+	fmt.Println("Tell the receiver to run:")
+	fmt.Printf("lancrypt recv --code %s --host <your-lan-ip>\n", code)
 
 	conn, err := s.listener.Accept()
 	if err != nil {
@@ -74,7 +101,7 @@ func (s *Sender) Start() error {
 	defer conn.Close()
 	s.listener.Close()
 
-	fmt.Printf("🤝 Peer connected from: %s\n", conn.RemoteAddr())
+	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
 	// 1. Key Exchange
 	fmt.Println("Performing secure key exchange...")
@@ -95,12 +122,11 @@ func (s *Sender) Start() error {
 
 	fileInfo, _ := file.Stat()
 	meta := fileMetadata{
-		Name: filepath.Base(s.FilePath), // Send only the filename, not the full path
+		Name: filepath.Base(s.FilePath),
 		Size: fileInfo.Size(),
 	}
 
 	metaBytes, _ := json.Marshal(meta)
-	// We send the size of the metadata first, so the receiver knows how much to read.
 	if err := binary.Write(conn, binary.LittleEndian, uint32(len(metaBytes))); err != nil {
 		return fmt.Errorf("could not send metadata size: %w", err)
 	}
@@ -116,37 +142,31 @@ func (s *Sender) Start() error {
 		return fmt.Errorf("could not create cipher: %w", err)
 	}
 
-	chunkBuffer := make([]byte, 4*1024) // 4KB chunks
+	chunkBuffer := make([]byte, 4*1024)
 	nonce := make([]byte, aead.NonceSize())
 	var chunkIndex uint64 = 0
 
 	for {
 		bytesRead, err := file.Read(chunkBuffer)
 		if err == io.EOF {
-			break // End of file
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("could not read file chunk: %w", err)
 		}
 
-		// Use the chunk index as the nonce (ensures it's unique for each chunk).
 		binary.LittleEndian.PutUint64(nonce, chunkIndex)
-
-		// Encrypt the chunk. The result includes the ciphertext and the auth tag.
 		encryptedChunk := aead.Seal(nil, nonce, chunkBuffer[:bytesRead], nil)
 
-		// Send the size of the encrypted chunk first.
 		if err := binary.Write(conn, binary.LittleEndian, uint32(len(encryptedChunk))); err != nil {
 			return fmt.Errorf("could not send chunk size: %w", err)
 		}
-		// Send the encrypted chunk itself.
 		if _, err := conn.Write(encryptedChunk); err != nil {
 			return fmt.Errorf("could not send chunk: %w", err)
 		}
 		chunkIndex++
 	}
 
-	// Send a zero-length chunk to signal the end of the transfer.
 	if err := binary.Write(conn, binary.LittleEndian, uint32(0)); err != nil {
 		return fmt.Errorf("could not send EOF signal: %w", err)
 	}
@@ -156,10 +176,9 @@ func (s *Sender) Start() error {
 	return nil
 }
 
-// ... (Close function remains the same) ...
+// Close cleans up the sender's resources, primarily the network listener.
 func (s *Sender) Close() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
 }
-
