@@ -19,21 +19,22 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-// ... (fileMetadata and Sender structs are unchanged) ...
 type fileMetadata struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 }
+
 type Sender struct {
 	FilePath     string
+	Passphrase   string // <-- ADD THIS FIELD
 	privateKey   [32]byte
 	publicKey    [32]byte
 	sharedSecret *[32]byte
 	listener     net.Listener
 }
 
-// ... (NewSender is unchanged) ...
-func NewSender(filePath string) (*Sender, error) {
+// Update NewSender to accept the passphrase
+func NewSender(filePath, passphrase string) (*Sender, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -61,6 +62,7 @@ func NewSender(filePath string) (*Sender, error) {
 
 	s := &Sender{
 		FilePath:   filePath,
+		Passphrase: passphrase, // <-- SET THE FIELD
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		listener:   listener,
@@ -106,21 +108,28 @@ func (s *Sender) Start() error {
 
 	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
-	// ... (Key Exchange and SAS are unchanged) ...
+	// 1. Key Exchange
 	fmt.Println("Performing secure key exchange...")
-	sharedSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
+	initialSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
 	if err != nil {
 		return fmt.Errorf("key exchange failed: %w", err)
 	}
-	s.sharedSecret = sharedSecret
+
+	// 2. Derive Final Key using HKDF
+	finalSecret, err := crypto.DeriveKey(initialSecret, s.Passphrase)
+	if err != nil {
+		return fmt.Errorf("key derivation failed: %w", err)
+	}
+	s.sharedSecret = finalSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
+	// 3. SAS Confirmation
 	sas := crypto.GenerateSAS(s.sharedSecret, 3)
 	if err := promptForConfirmation(sas); err != nil {
 		return err
 	}
 
-	// ... (Metadata transfer is unchanged) ...
+	// ... (The rest of the function remains the same) ...
 	fmt.Println("Sending file metadata...")
 	file, err := os.Open(s.FilePath)
 	if err != nil {
@@ -142,10 +151,8 @@ func (s *Sender) Start() error {
 		return fmt.Errorf("could not send metadata: %w", err)
 	}
 
-	// Create and start the progress bar.
 	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Sending %s", meta.Name))
 
-	// Encrypt and Stream File
 	aead, err := crypto.NewAESGCM(s.sharedSecret)
 	if err != nil {
 		return fmt.Errorf("could not create cipher: %w", err)
@@ -174,13 +181,14 @@ func (s *Sender) Start() error {
 			return fmt.Errorf("could not send chunk: %w", err)
 		}
 		chunkIndex++
-		bar.Add(bytesRead) // Update the progress bar
+		bar.Add(bytesRead)
 	}
 
 	if err := binary.Write(conn, binary.LittleEndian, uint32(0)); err != nil {
 		return fmt.Errorf("could not send EOF signal: %w", err)
 	}
 
+	bar.Finish()
 	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil

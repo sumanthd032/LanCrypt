@@ -16,15 +16,15 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-// ... (Receiver struct and NewReceiver are unchanged) ...
 type Receiver struct {
 	Code         string
+	Passphrase   string
 	privateKey   [32]byte
 	publicKey    [32]byte
 	sharedSecret *[32]byte
 }
 
-func NewReceiver(code string) (*Receiver, error) {
+func NewReceiver(code, passphrase string) (*Receiver, error) {
 	var privateKey [32]byte
 	if _, err := rand.Read(privateKey[:]); err != nil {
 		return nil, fmt.Errorf("could not generate private key: %w", err)
@@ -35,6 +35,7 @@ func NewReceiver(code string) (*Receiver, error) {
 
 	r := &Receiver{
 		Code:       code,
+		Passphrase: passphrase,
 		privateKey: privateKey,
 		publicKey:  publicKey,
 	}
@@ -43,7 +44,6 @@ func NewReceiver(code string) (*Receiver, error) {
 }
 
 func (r *Receiver) Connect() error {
-	// ... (Discovery and Rendezvous logic is unchanged) ...
 	fmt.Printf("🔎 Searching for sender '%s' on the local network...\n", r.Code)
 	entry, err := discovery.DiscoverService(r.Code)
 	if err != nil {
@@ -82,13 +82,17 @@ func (r *Receiver) Connect() error {
 
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
-	// ... (Key Exchange and SAS are unchanged) ...
 	fmt.Println("Performing secure key exchange...")
-	sharedSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
+	initialSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
 	if err != nil {
 		return fmt.Errorf("key exchange failed: %w", err)
 	}
-	r.sharedSecret = sharedSecret
+
+	finalSecret, err := crypto.DeriveKey(initialSecret, r.Passphrase)
+	if err != nil {
+		return fmt.Errorf("key derivation failed: %w", err)
+	}
+	r.sharedSecret = finalSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
 	sas := crypto.GenerateSAS(r.sharedSecret, 3)
@@ -96,7 +100,6 @@ func (r *Receiver) Connect() error {
 		return err
 	}
 
-	// ... (Metadata reception is unchanged) ...
 	fmt.Println("Receiving file metadata...")
 	var metaSize uint32
 	if err := binary.Read(conn, binary.LittleEndian, &metaSize); err != nil {
@@ -113,10 +116,8 @@ func (r *Receiver) Connect() error {
 		return fmt.Errorf("could not decode metadata: %w", err)
 	}
 
-	// Create and start the progress bar.
 	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Receiving %s", meta.Name))
 
-	// Receive, Decrypt, and Write File
 	file, err := os.Create(meta.Name)
 	if err != nil {
 		return fmt.Errorf("could not create file: %w", err)
@@ -158,9 +159,10 @@ func (r *Receiver) Connect() error {
 			return fmt.Errorf("failed to write to file: %w", err)
 		}
 		chunkIndex++
-		bar.Add(bytesWritten) // Update the progress bar
+		bar.Add(bytesWritten)
 	}
 
+	bar.Finish()
 	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil

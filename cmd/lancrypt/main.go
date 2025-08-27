@@ -25,8 +25,9 @@ var sendCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
+		passphrase, _ := cmd.Flags().GetString("passphrase")
 
-		sender, err := transfer.NewSender(filePath)
+		sender, err := transfer.NewSender(filePath, passphrase)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating sender: %v\n", err)
 			os.Exit(1)
@@ -46,8 +47,9 @@ var recvCmd = &cobra.Command{
 	Long:  `Receives a file from a sending peer using a transfer code, discovered automatically on the LAN.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		code, _ := cmd.Flags().GetString("code")
+		passphrase, _ := cmd.Flags().GetString("passphrase")
 
-		receiver, err := transfer.NewReceiver(code)
+		receiver, err := transfer.NewReceiver(code, passphrase)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating receiver: %v\n", err)
 			os.Exit(1)
@@ -61,6 +63,11 @@ var recvCmd = &cobra.Command{
 }
 
 func init() {
+	// Add passphrase flag to send command
+	sendCmd.Flags().StringP("passphrase", "p", "", "Optional passphrase for extra security")
+
+	// Add passphrase flag to recv command
+	recvCmd.Flags().StringP("passphrase", "p", "", "Optional passphrase for extra security")
 	recvCmd.Flags().StringP("code", "c", "", "The transfer code from the sender")
 	recvCmd.MarkFlagRequired("code")
 
@@ -74,4 +81,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
