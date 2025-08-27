@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+// ... (fileMetadata and Sender structs are unchanged) ...
 type fileMetadata struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
@@ -31,6 +32,7 @@ type Sender struct {
 	listener     net.Listener
 }
 
+// ... (NewSender is unchanged) ...
 func NewSender(filePath string) (*Sender, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -103,6 +105,7 @@ func (s *Sender) Start() error {
 
 	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
+	// 1. Key Exchange
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
 	if err != nil {
@@ -111,7 +114,15 @@ func (s *Sender) Start() error {
 	s.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
+	// 2. SAS Confirmation
+	sas := crypto.GenerateSAS(s.sharedSecret, 3)
+	if err := promptForConfirmation(sas); err != nil {
+		return err
+	}
+
+	// 3. Send File Metadata
 	fmt.Println("Sending file metadata...")
+	// ... (rest of the function is identical to Step 6)
 	file, err := os.Open(s.FilePath)
 	if err != nil {
 		return fmt.Errorf("could not open file: %w", err)

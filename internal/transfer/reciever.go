@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+// ... (Receiver struct and NewReceiver are unchanged) ...
 type Receiver struct {
 	Code         string
 	privateKey   [32]byte
@@ -79,6 +80,7 @@ func (r *Receiver) Connect() error {
 
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
+	// 1. Key Exchange
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
 	if err != nil {
@@ -87,7 +89,15 @@ func (r *Receiver) Connect() error {
 	r.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
+	// 2. SAS Confirmation
+	sas := crypto.GenerateSAS(r.sharedSecret, 3)
+	if err := promptForConfirmation(sas); err != nil {
+		return err
+	}
+
+	// 3. Receive File Metadata
 	fmt.Println("Receiving file metadata...")
+	// ... (rest of the function is identical to Step 6) ...
 	var metaSize uint32
 	if err := binary.Read(conn, binary.LittleEndian, &metaSize); err != nil {
 		return fmt.Errorf("could not read metadata size: %w", err)
@@ -151,4 +161,3 @@ func (r *Receiver) Connect() error {
 	fmt.Println("Session finished.")
 	return nil
 }
-
