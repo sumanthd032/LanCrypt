@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/sumanthd032/lancrypt/pkg/crypto"
 	"golang.org/x/crypto/curve25519"
 )
 
 // Receiver represents the state for the receiving side of the file transfer.
 type Receiver struct {
-	Code        string
-	privateKey  [32]byte
-	publicKey   [32]byte
-	// We will add more fields here, like the connection and shared secret key.
+	Code         string
+	privateKey   [32]byte
+	publicKey    [32]byte
+	sharedSecret *[32]byte // <-- ADD THIS FIELD
 }
 
-// NewReceiver creates and initializes a new Receiver instance.
+// ... (NewReceiver function remains the same) ...
 func NewReceiver(code string) (*Receiver, error) {
-	// 1. Generate the ephemeral key pair for the session.
 	var privateKey [32]byte
 	if _, err := rand.Read(privateKey[:]); err != nil {
 		return nil, fmt.Errorf("could not generate private key: %w", err)
@@ -27,7 +27,6 @@ func NewReceiver(code string) (*Receiver, error) {
 	var publicKey [32]byte
 	curve25519.ScalarBaseMult(&publicKey, &privateKey)
 
-	// Create the Receiver struct with the initialized values.
 	r := &Receiver{
 		Code:       code,
 		privateKey: privateKey,
@@ -37,22 +36,30 @@ func NewReceiver(code string) (*Receiver, error) {
 	return r, nil
 }
 
-// Connect attempts to establish a connection with the sender.
+// Connect attempts to establish a connection with the sender and perform key exchange.
 func (r *Receiver) Connect() error {
 	fmt.Printf("Attempting to connect to sender with code: %s\n", r.Code)
 
-	// 2. Dial the sender's address.
-	// net.Dial is the function used by a client to initiate a connection.
 	conn, err := net.Dial("tcp", r.Code)
 	if err != nil {
 		return fmt.Errorf("could not connect to sender: %w", err)
 	}
+	defer conn.Close()
 
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
-	// TODO: In the next step, we will perform the key exchange.
-	// For now, we just close the connection.
-	defer conn.Close()
+	// Perform the key exchange.
+	fmt.Println("Performing secure key exchange...")
+	sharedSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
+	if err != nil {
+		return fmt.Errorf("key exchange failed: %w", err)
+	}
+	r.sharedSecret = sharedSecret
+	fmt.Printf("✅ Key exchange successful. Shared secret established.\n")
+	// We can print the key for debugging. NEVER do this in a real application.
+	// fmt.Printf("DEBUG: Shared Secret: %x\n", *r.sharedSecret)
+
+	// TODO: Start encrypted file transfer.
 	fmt.Println("Session finished.")
 
 	return nil
