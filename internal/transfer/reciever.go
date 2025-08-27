@@ -12,6 +12,7 @@ import (
 
 	"github.com/sumanthd032/lancrypt/internal/discovery"
 	"github.com/sumanthd032/lancrypt/pkg/crypto"
+	"github.com/sumanthd032/lancrypt/pkg/util"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -42,6 +43,7 @@ func NewReceiver(code string) (*Receiver, error) {
 }
 
 func (r *Receiver) Connect() error {
+	// ... (Discovery and Rendezvous logic is unchanged) ...
 	fmt.Printf("🔎 Searching for sender '%s' on the local network...\n", r.Code)
 	entry, err := discovery.DiscoverService(r.Code)
 	if err != nil {
@@ -80,7 +82,7 @@ func (r *Receiver) Connect() error {
 
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
-	// 1. Key Exchange
+	// ... (Key Exchange and SAS are unchanged) ...
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
 	if err != nil {
@@ -89,15 +91,13 @@ func (r *Receiver) Connect() error {
 	r.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
-	// 2. SAS Confirmation
 	sas := crypto.GenerateSAS(r.sharedSecret, 3)
 	if err := promptForConfirmation(sas); err != nil {
 		return err
 	}
 
-	// 3. Receive File Metadata
+	// ... (Metadata reception is unchanged) ...
 	fmt.Println("Receiving file metadata...")
-	// ... (rest of the function is identical to Step 6) ...
 	var metaSize uint32
 	if err := binary.Read(conn, binary.LittleEndian, &metaSize); err != nil {
 		return fmt.Errorf("could not read metadata size: %w", err)
@@ -112,9 +112,11 @@ func (r *Receiver) Connect() error {
 	if err := json.Unmarshal(metaBytes, &meta); err != nil {
 		return fmt.Errorf("could not decode metadata: %w", err)
 	}
-	fmt.Printf("Received metadata: %+v\n", meta)
 
-	fmt.Println("Receiving and decrypting file...")
+	// Create and start the progress bar.
+	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Receiving %s", meta.Name))
+
+	// Receive, Decrypt, and Write File
 	file, err := os.Create(meta.Name)
 	if err != nil {
 		return fmt.Errorf("could not create file: %w", err)
@@ -151,13 +153,15 @@ func (r *Receiver) Connect() error {
 			return fmt.Errorf("failed to decrypt chunk #%d: %w", chunkIndex, err)
 		}
 
-		if _, err := file.Write(decryptedChunk); err != nil {
+		bytesWritten, err := file.Write(decryptedChunk)
+		if err != nil {
 			return fmt.Errorf("failed to write to file: %w", err)
 		}
 		chunkIndex++
+		bar.Add(bytesWritten) // Update the progress bar
 	}
 
-	fmt.Println("\n✅ File transfer complete.")
+	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil
 }

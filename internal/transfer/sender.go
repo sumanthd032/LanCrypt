@@ -70,6 +70,7 @@ func NewSender(filePath string) (*Sender, error) {
 }
 
 func (s *Sender) Start() error {
+	// ... (Rendezvous and mDNS setup is unchanged) ...
 	rvServer := rendezvous.NewServer()
 	rvServer.Start()
 	defer rvServer.Stop()
@@ -105,7 +106,7 @@ func (s *Sender) Start() error {
 
 	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
-	// 1. Key Exchange
+	// ... (Key Exchange and SAS are unchanged) ...
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
 	if err != nil {
@@ -114,15 +115,13 @@ func (s *Sender) Start() error {
 	s.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
-	// 2. SAS Confirmation
 	sas := crypto.GenerateSAS(s.sharedSecret, 3)
 	if err := promptForConfirmation(sas); err != nil {
 		return err
 	}
 
-	// 3. Send File Metadata
+	// ... (Metadata transfer is unchanged) ...
 	fmt.Println("Sending file metadata...")
-	// ... (rest of the function is identical to Step 6)
 	file, err := os.Open(s.FilePath)
 	if err != nil {
 		return fmt.Errorf("could not open file: %w", err)
@@ -142,9 +141,11 @@ func (s *Sender) Start() error {
 	if _, err := conn.Write(metaBytes); err != nil {
 		return fmt.Errorf("could not send metadata: %w", err)
 	}
-	fmt.Printf("Sent metadata: %+v\n", meta)
 
-	fmt.Println("Encrypting and sending file...")
+	// Create and start the progress bar.
+	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Sending %s", meta.Name))
+
+	// Encrypt and Stream File
 	aead, err := crypto.NewAESGCM(s.sharedSecret)
 	if err != nil {
 		return fmt.Errorf("could not create cipher: %w", err)
@@ -173,13 +174,14 @@ func (s *Sender) Start() error {
 			return fmt.Errorf("could not send chunk: %w", err)
 		}
 		chunkIndex++
+		bar.Add(bytesRead) // Update the progress bar
 	}
 
 	if err := binary.Write(conn, binary.LittleEndian, uint32(0)); err != nil {
 		return fmt.Errorf("could not send EOF signal: %w", err)
 	}
 
-	fmt.Println("\n✅ File transfer complete.")
+	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil
 }
