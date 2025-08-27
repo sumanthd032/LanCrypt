@@ -2,17 +2,13 @@ package transfer
 
 import (
 	"crypto/rand"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"os"
+	"io"
 
 	"github.com/sumanthd032/lancrypt/internal/discovery"
 	"github.com/sumanthd032/lancrypt/pkg/crypto"
-	"github.com/sumanthd032/lancrypt/pkg/util"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -25,6 +21,7 @@ type Receiver struct {
 }
 
 func NewReceiver(code, passphrase string) (*Receiver, error) {
+	// ... (This function remains the same as Step 9)
 	var privateKey [32]byte
 	if _, err := rand.Read(privateKey[:]); err != nil {
 		return nil, fmt.Errorf("could not generate private key: %w", err)
@@ -52,9 +49,7 @@ func (r *Receiver) Connect() error {
 	host := entry.AddrIPv4[0].String()
 	fmt.Printf("✅ Found sender at %s\n", host)
 
-	fmt.Printf("Resolving code '%s' via host %s...\n", r.Code, host)
 	rendezvousURL := fmt.Sprintf("http://%s:%d/%s", host, entry.Port, r.Code)
-
 	resp, err := http.Get(rendezvousURL)
 	if err != nil {
 		return fmt.Errorf("could not contact rendezvous server: %w", err)
@@ -70,7 +65,6 @@ func (r *Receiver) Connect() error {
 		return fmt.Errorf("could not read port from rendezvous response: %w", err)
 	}
 	port := string(portBytes)
-
 	targetAddr := net.JoinHostPort(host, port)
 	fmt.Printf("✅ Code resolved. Connecting to sender at %s\n", targetAddr)
 
@@ -79,10 +73,8 @@ func (r *Receiver) Connect() error {
 		return fmt.Errorf("could not connect to sender: %w", err)
 	}
 	defer conn.Close()
-
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
-	fmt.Println("Performing secure key exchange...")
 	initialSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
 	if err != nil {
 		return fmt.Errorf("key exchange failed: %w", err)
@@ -100,69 +92,10 @@ func (r *Receiver) Connect() error {
 		return err
 	}
 
-	fmt.Println("Receiving file metadata...")
-	var metaSize uint32
-	if err := binary.Read(conn, binary.LittleEndian, &metaSize); err != nil {
-		return fmt.Errorf("could not read metadata size: %w", err)
+	if err := receiveFile(conn, r.sharedSecret); err != nil {
+		return fmt.Errorf("file transfer failed: %w", err)
 	}
 
-	metaBytes := make([]byte, metaSize)
-	if _, err := io.ReadFull(conn, metaBytes); err != nil {
-		return fmt.Errorf("could not read metadata: %w", err)
-	}
-
-	var meta fileMetadata
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		return fmt.Errorf("could not decode metadata: %w", err)
-	}
-
-	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Receiving %s", meta.Name))
-
-	file, err := os.Create(meta.Name)
-	if err != nil {
-		return fmt.Errorf("could not create file: %w", err)
-	}
-	defer file.Close()
-
-	aead, err := crypto.NewAESGCM(r.sharedSecret)
-	if err != nil {
-		return fmt.Errorf("could not create cipher: %w", err)
-	}
-
-	nonce := make([]byte, aead.NonceSize())
-	var chunkIndex uint64 = 0
-
-	for {
-		var chunkSize uint32
-		if err := binary.Read(conn, binary.LittleEndian, &chunkSize); err != nil {
-			return fmt.Errorf("could not read chunk size: %w", err)
-		}
-
-		if chunkSize == 0 {
-			break
-		}
-
-		encryptedChunk := make([]byte, chunkSize)
-		if _, err := io.ReadFull(conn, encryptedChunk); err != nil {
-			return fmt.Errorf("could not read chunk: %w", err)
-		}
-
-		binary.LittleEndian.PutUint64(nonce, chunkIndex)
-
-		decryptedChunk, err := aead.Open(nil, nonce, encryptedChunk, nil)
-		if err != nil {
-			return fmt.Errorf("failed to decrypt chunk #%d: %w", chunkIndex, err)
-		}
-
-		bytesWritten, err := file.Write(decryptedChunk)
-		if err != nil {
-			return fmt.Errorf("failed to write to file: %w", err)
-		}
-		chunkIndex++
-		bar.Add(bytesWritten)
-	}
-
-	bar.Finish()
 	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil

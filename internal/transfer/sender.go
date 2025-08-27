@@ -2,13 +2,9 @@ package transfer
 
 import (
 	"crypto/rand"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,22 +15,17 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-type fileMetadata struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
-}
-
 type Sender struct {
 	FilePath     string
-	Passphrase   string // <-- ADD THIS FIELD
+	Passphrase   string
 	privateKey   [32]byte
 	publicKey    [32]byte
 	sharedSecret *[32]byte
 	listener     net.Listener
 }
 
-// Update NewSender to accept the passphrase
 func NewSender(filePath, passphrase string) (*Sender, error) {
+	// ... (This function remains the same as Step 9)
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -62,7 +53,7 @@ func NewSender(filePath, passphrase string) (*Sender, error) {
 
 	s := &Sender{
 		FilePath:   filePath,
-		Passphrase: passphrase, // <-- SET THE FIELD
+		Passphrase: passphrase,
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		listener:   listener,
@@ -72,7 +63,6 @@ func NewSender(filePath, passphrase string) (*Sender, error) {
 }
 
 func (s *Sender) Start() error {
-	// ... (Rendezvous and mDNS setup is unchanged) ...
 	rvServer := rendezvous.NewServer()
 	rvServer.Start()
 	defer rvServer.Stop()
@@ -94,9 +84,7 @@ func (s *Sender) Start() error {
 	}
 	defer mdnsServer.Shutdown()
 
-	fmt.Printf("✅ Sender is ready.\n")
-	fmt.Printf("Your transfer code is: %s\n\n", code)
-	fmt.Println("The receiver can now find you automatically.")
+	fmt.Printf("✅ Sender is ready.\nYour transfer code is: %s\n\n", code)
 	fmt.Printf("On the other device, run: lancrypt recv --code %s\n", code)
 
 	conn, err := s.listener.Accept()
@@ -108,14 +96,11 @@ func (s *Sender) Start() error {
 
 	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
-	// 1. Key Exchange
-	fmt.Println("Performing secure key exchange...")
 	initialSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
 	if err != nil {
 		return fmt.Errorf("key exchange failed: %w", err)
 	}
 
-	// 2. Derive Final Key using HKDF
 	finalSecret, err := crypto.DeriveKey(initialSecret, s.Passphrase)
 	if err != nil {
 		return fmt.Errorf("key derivation failed: %w", err)
@@ -123,72 +108,15 @@ func (s *Sender) Start() error {
 	s.sharedSecret = finalSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
-	// 3. SAS Confirmation
 	sas := crypto.GenerateSAS(s.sharedSecret, 3)
 	if err := promptForConfirmation(sas); err != nil {
 		return err
 	}
 
-	// ... (The rest of the function remains the same) ...
-	fmt.Println("Sending file metadata...")
-	file, err := os.Open(s.FilePath)
-	if err != nil {
-		return fmt.Errorf("could not open file: %w", err)
-	}
-	defer file.Close()
-
-	fileInfo, _ := file.Stat()
-	meta := fileMetadata{
-		Name: filepath.Base(s.FilePath),
-		Size: fileInfo.Size(),
+	if err := sendFile(conn, s.FilePath, s.sharedSecret); err != nil {
+		return fmt.Errorf("file transfer failed: %w", err)
 	}
 
-	metaBytes, _ := json.Marshal(meta)
-	if err := binary.Write(conn, binary.LittleEndian, uint32(len(metaBytes))); err != nil {
-		return fmt.Errorf("could not send metadata size: %w", err)
-	}
-	if _, err := conn.Write(metaBytes); err != nil {
-		return fmt.Errorf("could not send metadata: %w", err)
-	}
-
-	bar := util.NewProgressBar(meta.Size, fmt.Sprintf("Sending %s", meta.Name))
-
-	aead, err := crypto.NewAESGCM(s.sharedSecret)
-	if err != nil {
-		return fmt.Errorf("could not create cipher: %w", err)
-	}
-
-	chunkBuffer := make([]byte, 4*1024)
-	nonce := make([]byte, aead.NonceSize())
-	var chunkIndex uint64 = 0
-
-	for {
-		bytesRead, err := file.Read(chunkBuffer)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("could not read file chunk: %w", err)
-		}
-
-		binary.LittleEndian.PutUint64(nonce, chunkIndex)
-		encryptedChunk := aead.Seal(nil, nonce, chunkBuffer[:bytesRead], nil)
-
-		if err := binary.Write(conn, binary.LittleEndian, uint32(len(encryptedChunk))); err != nil {
-			return fmt.Errorf("could not send chunk size: %w", err)
-		}
-		if _, err := conn.Write(encryptedChunk); err != nil {
-			return fmt.Errorf("could not send chunk: %w", err)
-		}
-		chunkIndex++
-		bar.Add(bytesRead)
-	}
-
-	if err := binary.Write(conn, binary.LittleEndian, uint32(0)); err != nil {
-		return fmt.Errorf("could not send EOF signal: %w", err)
-	}
-
-	bar.Finish()
 	fmt.Println("✅ File transfer complete.")
 	fmt.Println("Session finished.")
 	return nil
