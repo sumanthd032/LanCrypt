@@ -25,7 +25,7 @@ var sendCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
-		
+
 		sender, err := transfer.NewSender(filePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating sender: %v\n", err)
@@ -43,12 +43,11 @@ var sendCmd = &cobra.Command{
 var recvCmd = &cobra.Command{
 	Use:   "recv",
 	Short: "Receive a file from a peer on the local network",
-	Long:  `Receives a file from a sending peer using a transfer code and the sender's host IP.`,
+	Long:  `Receives a file from a sending peer using a transfer code, discovered automatically on the LAN.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		code, _ := cmd.Flags().GetString("code")
-		host, _ := cmd.Flags().GetString("host")
 
-		receiver, err := transfer.NewReceiver(code, host)
+		receiver, err := transfer.NewReceiver(code)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating receiver: %v\n", err)
 			os.Exit(1)
@@ -63,9 +62,7 @@ var recvCmd = &cobra.Command{
 
 func init() {
 	recvCmd.Flags().StringP("code", "c", "", "The transfer code from the sender")
-	recvCmd.Flags().StringP("host", "H", "", "The sender's local network IP address")
 	recvCmd.MarkFlagRequired("code")
-	recvCmd.MarkFlagRequired("host")
 
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(recvCmd)
@@ -77,3 +74,4 @@ func main() {
 		os.Exit(1)
 	}
 }
+

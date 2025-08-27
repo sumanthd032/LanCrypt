@@ -10,22 +10,19 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/sumanthd032/lancrypt/internal/rendezvous"
+	"github.com/sumanthd032/lancrypt/internal/discovery"
 	"github.com/sumanthd032/lancrypt/pkg/crypto"
 	"golang.org/x/crypto/curve25519"
 )
 
-// Receiver represents the state for the receiving side of the file transfer.
 type Receiver struct {
 	Code         string
-	Host         string
 	privateKey   [32]byte
 	publicKey    [32]byte
 	sharedSecret *[32]byte
 }
 
-// NewReceiver creates and initializes a new Receiver instance.
-func NewReceiver(code, host string) (*Receiver, error) {
+func NewReceiver(code string) (*Receiver, error) {
 	var privateKey [32]byte
 	if _, err := rand.Read(privateKey[:]); err != nil {
 		return nil, fmt.Errorf("could not generate private key: %w", err)
@@ -36,7 +33,6 @@ func NewReceiver(code, host string) (*Receiver, error) {
 
 	r := &Receiver{
 		Code:       code,
-		Host:       host,
 		privateKey: privateKey,
 		publicKey:  publicKey,
 	}
@@ -44,11 +40,17 @@ func NewReceiver(code, host string) (*Receiver, error) {
 	return r, nil
 }
 
-// Connect attempts to establish a connection with the sender.
 func (r *Receiver) Connect() error {
-	// 1. Resolve the code to a port via the rendezvous server
-	fmt.Printf("Resolving code '%s' via host %s...\n", r.Code, r.Host)
-	rendezvousURL := fmt.Sprintf("http://%s:%s/%s", r.Host, rendezvous.RendezvousPort, r.Code)
+	fmt.Printf("🔎 Searching for sender '%s' on the local network...\n", r.Code)
+	entry, err := discovery.DiscoverService(r.Code)
+	if err != nil {
+		return err
+	}
+	host := entry.AddrIPv4[0].String()
+	fmt.Printf("✅ Found sender at %s\n", host)
+
+	fmt.Printf("Resolving code '%s' via host %s...\n", r.Code, host)
+	rendezvousURL := fmt.Sprintf("http://%s:%d/%s", host, entry.Port, r.Code)
 
 	resp, err := http.Get(rendezvousURL)
 	if err != nil {
@@ -66,11 +68,9 @@ func (r *Receiver) Connect() error {
 	}
 	port := string(portBytes)
 
-	// The actual address for the file transfer
-	targetAddr := net.JoinHostPort(r.Host, port)
+	targetAddr := net.JoinHostPort(host, port)
 	fmt.Printf("✅ Code resolved. Connecting to sender at %s\n", targetAddr)
 
-	// 2. Connect to the resolved address
 	conn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
 		return fmt.Errorf("could not connect to sender: %w", err)
@@ -79,7 +79,6 @@ func (r *Receiver) Connect() error {
 
 	fmt.Printf("✅ Connected to sender: %s\n", conn.RemoteAddr())
 
-	// Key Exchange
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &r.privateKey, &r.publicKey)
 	if err != nil {
@@ -88,7 +87,6 @@ func (r *Receiver) Connect() error {
 	r.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
-	// Receive File Metadata
 	fmt.Println("Receiving file metadata...")
 	var metaSize uint32
 	if err := binary.Read(conn, binary.LittleEndian, &metaSize); err != nil {
@@ -106,7 +104,6 @@ func (r *Receiver) Connect() error {
 	}
 	fmt.Printf("Received metadata: %+v\n", meta)
 
-	// Receive, Decrypt, and Write File
 	fmt.Println("Receiving and decrypting file...")
 	file, err := os.Create(meta.Name)
 	if err != nil {
@@ -154,3 +151,4 @@ func (r *Receiver) Connect() error {
 	fmt.Println("Session finished.")
 	return nil
 }
+

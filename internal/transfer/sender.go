@@ -9,21 +9,20 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/sumanthd032/lancrypt/internal/discovery"
 	"github.com/sumanthd032/lancrypt/internal/rendezvous"
 	"github.com/sumanthd032/lancrypt/pkg/crypto"
 	"github.com/sumanthd032/lancrypt/pkg/util"
 	"golang.org/x/crypto/curve25519"
 )
 
-// fileMetadata holds information about the file being transferred.
 type fileMetadata struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 }
-
-// Sender represents the state for the sending side of the file transfer.
 type Sender struct {
 	FilePath     string
 	privateKey   [32]byte
@@ -32,7 +31,6 @@ type Sender struct {
 	listener     net.Listener
 }
 
-// NewSender creates and initializes a new Sender instance.
 func NewSender(filePath string) (*Sender, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -69,30 +67,32 @@ func NewSender(filePath string) (*Sender, error) {
 	return s, nil
 }
 
-// Start begins the sender's process of listening for a connection.
 func (s *Sender) Start() error {
-	// Start the rendezvous server.
 	rvServer := rendezvous.NewServer()
 	rvServer.Start()
 	defer rvServer.Stop()
 
-	// Extract the port from the listener's address.
 	addrParts := strings.Split(s.listener.Addr().String(), ":")
 	port := addrParts[len(addrParts)-1]
 
-	// Generate a user-friendly code.
 	code, err := util.GenerateCode(3)
 	if err != nil {
 		return fmt.Errorf("could not generate code: %w", err)
 	}
 
-	// Register the code with the rendezvous server.
 	rvServer.Register(code, port)
+
+	rendezvousPort, _ := strconv.Atoi(rendezvous.RendezvousPort)
+	mdnsServer, err := discovery.PublishService(code, rendezvousPort)
+	if err != nil {
+		return fmt.Errorf("could not publish mDNS service: %w", err)
+	}
+	defer mdnsServer.Shutdown()
 
 	fmt.Printf("✅ Sender is ready.\n")
 	fmt.Printf("Your transfer code is: %s\n\n", code)
-	fmt.Println("Tell the receiver to run:")
-	fmt.Printf("lancrypt recv --code %s --host <your-lan-ip>\n", code)
+	fmt.Println("The receiver can now find you automatically.")
+	fmt.Printf("On the other device, run: lancrypt recv --code %s\n", code)
 
 	conn, err := s.listener.Accept()
 	if err != nil {
@@ -103,7 +103,6 @@ func (s *Sender) Start() error {
 
 	fmt.Printf("\n🤝 Peer connected from: %s\n", conn.RemoteAddr())
 
-	// 1. Key Exchange
 	fmt.Println("Performing secure key exchange...")
 	sharedSecret, err := crypto.PerformKeyExchange(conn, &s.privateKey, &s.publicKey)
 	if err != nil {
@@ -112,7 +111,6 @@ func (s *Sender) Start() error {
 	s.sharedSecret = sharedSecret
 	fmt.Printf("✅ Key exchange successful.\n")
 
-	// 2. Send File Metadata
 	fmt.Println("Sending file metadata...")
 	file, err := os.Open(s.FilePath)
 	if err != nil {
@@ -135,7 +133,6 @@ func (s *Sender) Start() error {
 	}
 	fmt.Printf("Sent metadata: %+v\n", meta)
 
-	// 3. Encrypt and Stream File
 	fmt.Println("Encrypting and sending file...")
 	aead, err := crypto.NewAESGCM(s.sharedSecret)
 	if err != nil {
@@ -176,7 +173,6 @@ func (s *Sender) Start() error {
 	return nil
 }
 
-// Close cleans up the sender's resources, primarily the network listener.
 func (s *Sender) Close() {
 	if s.listener != nil {
 		s.listener.Close()
