@@ -25,7 +25,6 @@ type Sender struct {
 }
 
 func NewSender(filePath, passphrase string) (*Sender, error) {
-	// ... (This function remains the same as Step 9)
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
